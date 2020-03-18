@@ -24,10 +24,13 @@ std::tuple<hoNDArray<float>,hoNDArray<float>,hoNDArray<float>> moco_t1_fit(const
 
 }
 
+hoNDArray<vector_td<float,2>> diff_demons(const hoNDArray<float>& fixed, const hoNDArray<float>& moving, int iterations, float sigma){
+    return Gadgetron::Registration::diffeomorphic_demons<float,2>(fixed,moving,iterations,sigma);
+}
 
 PYBIND11_MODULE(gadgetron_toolbox,m){
  m.doc() = "Registration module";
- m.def("demons",&Gadgetron::Registration::diffeomorphic_demons<float,2>, "Registers an image");
+ m.def("demons",&diff_demons, "Registers an image");
   m.def("deform_image",&Gadgetron::Registration::deform_image<float,2>, "Registers an image");
   m.def("motion_compensated_t1_fit",moco_t1_fit);
 }
