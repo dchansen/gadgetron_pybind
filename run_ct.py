@@ -6,18 +6,19 @@ from scipy.misc import face
 import matplotlib.pyplot as plt
 import skimage.transform as st
 from scipy.misc import imread
-
+import imageio
 if __name__ == '__main__':
 
-    # image = face(True).astype(np.float32)
-    image1 = imread('lenag1.png',flatten=True)
-    image2 = imread('lenag2.png',flatten=True)
+    image1 = imageio.imread('lenag1.png').astype(np.float32)/256
+    # image = 255-image
+    image2 = imageio.imread('lenag2.png').astype(np.float32)/256
 
+    print(np.linalg.norm(image1-image2))
     vfield = gadgetron_toolbox.demons(image1,image2, 200,2.0)
 
     registered_image = gadgetron_toolbox.deform_image(image1,vfield)
-
-    print(vfield)
+    print(np.linalg.norm(registered_image-image2))
+    print(vfield.shape)
 
     plt.imshow(registered_image,cmap='gray')
     plt.figure()
