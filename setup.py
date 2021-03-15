@@ -84,7 +84,7 @@ setup(
     long_description='',
     # add extension module
     ext_modules=[CMakeExtension('gadgetron_toolbox')],
-
+    license='MIT',
     # add custom build_ext command
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
