@@ -8,6 +8,8 @@
 #include <pybind11/stl.h>
 #include <gadgetron/cmr_motion_correction.h>
 #include <gadgetron/non_local_bayes.h>
+#include <range/v3/algorithm.hpp>
+
 
 using namespace Gadgetron;
 //
@@ -129,19 +131,83 @@ hoNDArray<vector_td<float, 2>> t1_registration(const hoNDArray<std::complex<floa
   return T1::t1_registration(data, TI, iterations, {demons_iterations, demons_sigma, step_size});
 }
 
+hoNDArray<vector_td<float, 2>> t1_registration_base(const hoNDArray<std::complex<float>> &data, const hoNDArray<vector_td<float, 2>> &vfield, const std::vector<float> &TI, unsigned int iterations, unsigned int demons_iterations, float demons_sigma, float step_size)
+{
+  return T1::t1_registration(data, TI, vfield, iterations, {demons_iterations, demons_sigma, step_size});
+}
+
 hoNDArray<vector_td<float, 2>> t1_registration_cmr(const hoNDArray<std::complex<float>> &data, const std::vector<float> &TI, unsigned int iterations)
 {
   return T1::t1_moco_cmr(data, TI, iterations);
 }
 
-hoNDArray<float> non_local_bayes_float(const hoNDArray<float>& data, float noise, unsigned int search_radius){
-  return Denoise::non_local_bayes(data,noise,search_radius);
+hoNDArray<float> non_local_bayes_float(const hoNDArray<float> &data, float noise, unsigned int search_radius)
+{
+  return Denoise::non_local_bayes(data, noise, search_radius);
 }
-hoNDArray<std::complex<float>> non_local_bayes_cplx(const hoNDArray<std::complex<float>>& data, float noise, unsigned int search_radius){
-  return Denoise::non_local_bayes(data,noise,search_radius);
+hoNDArray<std::complex<float>> non_local_bayes_cplx(const hoNDArray<std::complex<float>> &data, float noise, unsigned int search_radius)
+{
+  return Denoise::non_local_bayes(data, noise, search_radius);
 }
 
+hoNDArray<vector_td<float, 2>> register_compatible_frames(const hoNDArray<float> &abs_data, const std::vector<float> &TIs)
+{
+  using namespace Gadgetron::Indexing;
+  using namespace ranges;
+  auto arg_max_TI = max_element(TIs) - TIs.begin();
 
+  const hoNDArray<float> reference_frame = abs_data(slice, slice, arg_max_TI);
+
+  const auto valid_transforms =
+      view::iota(size_t(0), abs_data.get_size(2)) |
+      views::filter([&arg_max_TI](auto index) { return index != arg_max_TI; }) | views::filter([&](auto index) {
+        return jensen_shannon_divergence(abs_data(slice, slice, index), reference_frame) < 0.2;
+      }) |
+      to<std::vector>();
+
+  std::vector<hoNDArray<vector_td<float, 2>>> vfields(abs_data.get_size(2));
+
+#pragma omp parallel for default(shared)
+  for (int i = 0; i < int(valid_transforms.size()); i++)
+  {
+    vfields[valid_transforms[i]] =
+        T1::register_groups_CMR(abs_data(slice, slice, valid_transforms[i]), reference_frame);
+  }
+  auto missing_indices = view::iota(size_t(0), abs_data.get_size(2)) | view::filter([&](auto index) {
+                           return !binary_search(valid_transforms, index) && (index != arg_max_TI);
+                         });
+
+  for (auto index : missing_indices)
+  {
+    auto closest_index = lower_bound(valid_transforms, index);
+    if (closest_index != valid_transforms.end())
+    {
+      vfields[index] = vfields[*closest_index];
+    }
+    else
+    {
+      vfields[index] = hoNDArray<vector_td<float, 2>>(abs_data.get_size(0), abs_data.get_size(1), 1);
+      vfields[index].fill(vector_td<float, 2>(0, 0));
+    }
+  }
+
+  vfields[arg_max_TI] = hoNDArray<vector_td<float, 2>>(abs_data.get_size(0), abs_data.get_size(1), 1);
+  vfields[arg_max_TI].fill(vector_td<float, 2>(0, 0));
+  return concat_along_dimension(vfields, 2);
+}
+
+hoNDArray<std::complex<float>> multi_stage_T1_registration(const hoNDArray<std::complex<float>> &data, const std::vector<float> &TIs, int iterations, int demons_iterations, float regularization_sigma, float step_size) 
+{
+
+  auto abs_data = abs(data);
+  auto first_vfields = register_compatible_frames(abs_data, TIs);
+  auto second_vfields = T1::t1_registration(data, TIs, std::move(first_vfields), iterations,
+                                            {demons_iterations, regularization_sigma, step_size});
+
+  auto deformed_images = T1::deform_groups(abs_data, second_vfields);
+  auto final_vfield = T1::register_groups_CMR(abs_data, deformed_images, 24.0f);
+  return T1::deform_groups(data, final_vfield);
+}
 
 PYBIND11_MODULE(gadgetron_toolbox, m)
 {
@@ -166,13 +232,15 @@ PYBIND11_MODULE(gadgetron_toolbox, m)
   m.def("predict_signal", &predict_signal_2param, "Predicts signal");
   m.def("phase_correct", &Gadgetron::T1::phase_correct, "Phase correction");
   m.def("t1_registration", &t1_registration, "");
+  m.def("t1_registration_offset", &t1_registration_base, "");
   m.def("t1_registration_cmr", &t1_registration_cmr, "");
-  m.def("deform_groups", py::overload_cast<const hoNDArray<float>&, const hoNDArray<vector_td<float,2>>&>(&Gadgetron::T1::deform_groups), "");
-  m.def("deform_groups", py::overload_cast<const hoNDArray<std::complex<float>>&, const hoNDArray<vector_td<float,2>>&>(&Gadgetron::T1::deform_groups), "");
+  m.def("multi_stage_t1_registration",&multi_stage_T1_registration,"");
+  m.def("deform_groups", py::overload_cast<const hoNDArray<float> &, const hoNDArray<vector_td<float, 2>> &>(&Gadgetron::T1::deform_groups), "");
+  m.def("deform_groups", py::overload_cast<const hoNDArray<std::complex<float>> &, const hoNDArray<vector_td<float, 2>> &>(&Gadgetron::T1::deform_groups), "");
   m.def("upsample", &upsample<float, 2>, "Upsamples image");
   m.def("downsample", &downsample<float, 2>, "Downsamples image");
   m.def("cmr_registration", &cmr_registration, "CMR based registration");
   m.def("cmr_registration_MI", &cmr_registration_MI, "CMR based registration using mutual information");
-  m.def("non_local_bayes",non_local_bayes_float, "Non local Bayes denoising");
-  m.def("non_local_bayes",non_local_bayes_cplx, "Non local Bayes denoising");
+  m.def("non_local_bayes", non_local_bayes_float, "Non local Bayes denoising");
+  m.def("non_local_bayes", non_local_bayes_cplx, "Non local Bayes denoising");
 }

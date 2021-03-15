@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
-project(gadgetron_pybind)
+project(gadgetron_pybind LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 
+find_package(Python COMPONENTS Interpreter Development REQUIRED)
 find_package(pybind11 REQUIRED)
 find_package(gadgetron CONFIG REQUIRED)
 pybind11_add_module(gadgetron_toolbox MODULE demons.cpp)
